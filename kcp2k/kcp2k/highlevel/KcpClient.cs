@@ -9,7 +9,7 @@ namespace kcp2k
     public class KcpClient : KcpPeer
     {
         // IO
-        protected Socket socket;
+        protected ISocket socket;
         public EndPoint remoteEndPoint;
 
         // expose local endpoint for users / relays / nat traversal etc.
@@ -43,12 +43,14 @@ namespace kcp2k
         bool active = false; // active between when connect() and disconnect() are called
         public bool connected;
 
-        public KcpClient(Action OnConnected,
-                         Action<ArraySegment<byte>, KcpChannel> OnData,
-                         Action OnDisconnected,
-                         Action<ErrorCode, string> OnError,
-                         KcpConfig config)
-                         : base(config, 0) // client has no cookie yet
+        public KcpClient(
+            Action OnConnected,
+            Action<ArraySegment<byte>, KcpChannel> OnData,
+            Action OnDisconnected,
+            Action<ErrorCode, string> OnError,
+            KcpConfig config
+        )
+            : base(config, 0) // client has no cookie yet
         {
             // initialize callbacks first to ensure they can be used safely.
             OnConnectedCallback = OnConnected;
@@ -96,6 +98,7 @@ namespace kcp2k
                 return;
             }
 
+#if UNITY_EDITOR || !UNITY_WEBGL
             // resolve host name before creating peer.
             // fixes: https://github.com/MirrorNetworking/Mirror/issues/3361
             if (!Common.ResolveHostname(address, out IPAddress[] addresses))
@@ -105,18 +108,27 @@ namespace kcp2k
                 OnDisconnectedCallback();
                 return;
             }
-
+#endif
             // create fresh peer for each new session
             // client doesn't need secure cookie.
             Reset(config);
 
             Log.Info($"[KCP] Client: connect to {address}:{port}");
 
+#if UNITY_EDITOR || !UNITY_WEBGL
             // create socket
             remoteEndPoint = new IPEndPoint(addresses[0], port);
-            socket = new Socket(remoteEndPoint.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
+            socket = new KcpSocket(
+                remoteEndPoint.AddressFamily,
+                SocketType.Dgram,
+                ProtocolType.Udp
+            );
+#elif UNITY_WEBGL && WECHATMINIGAME
+            socket = new WXSocket(address, port);
+#endif
             active = true;
 
+#if UNITY_EDITOR || !UNITY_WEBGL
             // recv & send are called from main thread.
             // need to ensure this never blocks.
             // even a 1ms block per connection would stop us from scaling.
@@ -127,7 +139,7 @@ namespace kcp2k
 
             // bind to endpoint so we can use send/recv instead of sendto/recvfrom.
             socket.Connect(remoteEndPoint);
-
+#endif
             // immediately send a hello message to the server.
             // server will call OnMessage and add the new connection.
             // note that this still has cookie=0 until we receive the server's hello.
