@@ -4,18 +4,26 @@ using System.Net.Sockets;
 
 namespace kcp2k
 {
-    public static class Extensions
+    public class KcpSocket : Socket, ISocket
     {
-        // ArraySegment as HexString for convenience
-        public static string ToHexString(this ArraySegment<byte> segment) =>
-            BitConverter.ToString(segment.Array, segment.Offset, segment.Count);
+        public KcpSocket(AddressFamily addressFamily, SocketType socketType, ProtocolType protocolType) : base(addressFamily, socketType, protocolType)
+        {
+        }
 
+        public KcpSocket(SocketInformation socketInformation) : base(socketInformation)
+        {
+        }
+
+        public KcpSocket(SocketType socketType, ProtocolType protocolType) : base(socketType, protocolType)
+        {
+        }
+        
         // non-blocking UDP send.
         // allows for reuse when overwriting KcpServer/Client (i.e. for relays).
         // => wrapped with Poll to avoid WouldBlock allocating new SocketException.
         // => wrapped with try-catch to ignore WouldBlock exception.
         // make sure to set socket.Blocking = false before using this!
-        public static bool SendToNonBlocking(this Socket socket, ArraySegment<byte> data, EndPoint remoteEP)
+        public bool SendNonBlocking(ArraySegment<byte> data)
         {
             try
             {
@@ -26,12 +34,11 @@ namespace kcp2k
                 // note that this entirely to avoid allocations.
                 // non-blocking UDP doesn't need Poll in other languages.
                 // and the code still works without the Poll call.
-                if (!socket.Poll(0, SelectMode.SelectWrite)) return false;
+                if (!base.Poll(0, SelectMode.SelectWrite)) return false;
 
-                // send to the the endpoint.
-                // do not send to 'newClientEP', as that's always reused.
-                // fixes https://github.com/MirrorNetworking/Mirror/issues/3296
-                socket.SendTo(data.Array, data.Offset, data.Count, SocketFlags.None, remoteEP);
+                // SendTo allocates. we used bound Send.
+                base.Send(data.Array, data.Offset, data.Count, SocketFlags.None);
+                //Log.Info($"[KcpSocket] SendNonBlocking, data: {BitConverter.ToString(data.Array!, data.Offset, data.Count)}");
                 return true;
             }
             catch (SocketException e)
@@ -50,7 +57,7 @@ namespace kcp2k
         // => wrapped with Poll to avoid WouldBlock allocating new SocketException.
         // => wrapped with try-catch to ignore WouldBlock exception.
         // make sure to set socket.Blocking = false before using this!
-        public static bool ReceiveFromNonBlocking(this Socket socket, byte[] recvBuffer, out ArraySegment<byte> data, ref EndPoint remoteEP)
+        public bool ReceiveNonBlocking(byte[] recvBuffer, out ArraySegment<byte> data)
         {
             data = default;
 
@@ -63,17 +70,17 @@ namespace kcp2k
                 // note that this entirely to avoid allocations.
                 // non-blocking UDP doesn't need Poll in other languages.
                 // and the code still works without the Poll call.
-                if (!socket.Poll(0, SelectMode.SelectRead)) return false;
+                if (!base.Poll(0, SelectMode.SelectRead)) return false;
 
-                // NOTE: ReceiveFrom allocates.
-                //   we pass our IPEndPoint to ReceiveFrom.
-                //   receive from calls newClientEP.Create(socketAddr).
-                //   IPEndPoint.Create always returns a new IPEndPoint.
-                //   https://github.com/mono/mono/blob/f74eed4b09790a0929889ad7fc2cf96c9b6e3757/mcs/class/System/System.Net.Sockets/Socket.cs#L1761
+                // ReceiveFrom allocates. we used bound Receive.
+                // returns amount of bytes written into buffer.
+                // throws SocketException if datagram was larger than buffer.
+                // https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.socket.receive?view=net-6.0
                 //
                 // throws SocketException if datagram was larger than buffer.
                 // https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.socket.receive?view=net-6.0
-                int size = socket.ReceiveFrom(recvBuffer, 0, recvBuffer.Length, SocketFlags.None, ref remoteEP);
+                int size = base.Receive(recvBuffer, 0, recvBuffer.Length, SocketFlags.None);
+                //if (size > 0) Log.Info($"[KcpSocket] ReceiveNonBlocking, data: {BitConverter.ToString(recvBuffer, 0, size)}");
                 data = new ArraySegment<byte>(recvBuffer, 0, size);
                 return true;
             }
